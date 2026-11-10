@@ -1,9 +1,21 @@
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import './App.css'
+import { supabase } from './supabaseClient'
+import Auth from './Auth'
+import CompanySetup from './CompanySetup'
 
 function App() {
   const [page, setPage] = useState('Dashboard')
+
+  // Authentication
+  const [session, setSession] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
+
+  // Company
+  const [company, setCompany] = useState(null)
+  const [companyLoading, setCompanyLoading] = useState(false)
+  const [companyError, setCompanyError] = useState('')
 
   // AI Content Creator
   const [business, setBusiness] = useState('')
@@ -16,11 +28,129 @@ function App() {
   const [postText, setPostText] = useState('')
   const [postPlatform, setPostPlatform] = useState('Instagram')
   const [postDate, setPostDate] = useState('')
+  const [postsLoading, setPostsLoading] = useState(false)
+  const [postMessage, setPostMessage] = useState('')
 
   // SEO Tools
   const [keyword, setKeyword] = useState('')
   const [seoTips, setSeoTips] = useState('')
 
+  // Check login session
+  useEffect(() => {
+    let mounted = true
+
+    async function checkSession() {
+      const { data, error } = await supabase.auth.getSession()
+
+      if (!mounted) return
+
+      if (error) {
+        console.error(error.message)
+      }
+
+      setSession(data?.session ?? null)
+      setAuthLoading(false)
+    }
+
+    checkSession()
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession)
+    })
+
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
+  }, [])
+
+  // Load logged-in user's company
+  useEffect(() => {
+    let active = true
+
+    async function loadCompany() {
+      if (!session?.user) {
+        setCompany(null)
+        setCompanyLoading(false)
+        return
+      }
+
+      setCompany(null)
+      setCompanyError('')
+      setCompanyLoading(true)
+
+      const { data, error } = await supabase
+        .from('companies')
+        .select('id, name')
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle()
+
+      if (!active) return
+
+      if (error) {
+        setCompanyError(error.message)
+      } else {
+        setCompany(data)
+      }
+
+      setCompanyLoading(false)
+    }
+
+    loadCompany()
+
+    return () => {
+      active = false
+    }
+  }, [session?.user?.id])
+
+  // Load company posts from Supabase
+  useEffect(() => {
+    let active = true
+
+    async function loadPosts() {
+      if (!company?.id) {
+        setPosts([])
+        return
+      }
+
+      setPostsLoading(true)
+      setPostMessage('')
+
+      const { data, error } = await supabase
+        .from('social_posts')
+        .select('id, content, platform, planned_at')
+        .eq('company_id', company.id)
+        .order('planned_at', { ascending: true })
+
+      if (!active) return
+
+      if (error) {
+        setPostMessage('Could not load posts: ' + error.message)
+      } else {
+        const formattedPosts = (data || []).map(post => ({
+          id: post.id,
+          text: post.content,
+          platform: post.platform.charAt(0).toUpperCase() + post.platform.slice(1),
+          date: post.planned_at.slice(0, 10)
+        }))
+
+        setPosts(formattedPosts)
+      }
+
+      setPostsLoading(false)
+    }
+
+    loadPosts()
+
+    return () => {
+      active = false
+    }
+  }, [company?.id])
+
+  // Generate promotional content
   function generateContent() {
     if (!business.trim() || !product.trim()) {
       setContent('Please enter your business name and product.')
@@ -38,30 +168,71 @@ Looking for something special? We have just what you need.
     )
   }
 
-  function addPost() {
+  // Save post to Supabase
+  async function addPost() {
     if (!postText.trim() || !postDate) {
-      alert('Please enter your post and choose a date.')
+      setPostMessage('Please enter your post and choose a date.')
       return
     }
 
-    setPosts([
-      ...posts,
-      {
-        id: Date.now(),
-        text: postText,
-        platform: postPlatform,
-        date: postDate
+    if (!company?.id || !session?.user?.id) {
+      setPostMessage('Please login and create a company first.')
+      return
+    }
+
+    setPostsLoading(true)
+    setPostMessage('')
+
+    const { data, error } = await supabase
+      .from('social_posts')
+      .insert({
+        company_id: company.id,
+        created_by: session.user.id,
+        platform: postPlatform.toLowerCase(),
+        content: postText.trim(),
+        planned_at: `${postDate}T12:00:00+00:00`,
+        status: 'planned'
+      })
+      .select('id, content, platform, planned_at')
+      .single()
+
+    if (error) {
+      setPostMessage('Could not save post: ' + error.message)
+    } else {
+      const newPost = {
+        id: data.id,
+        text: data.content,
+        platform: data.platform.charAt(0).toUpperCase() + data.platform.slice(1),
+        date: data.planned_at.slice(0, 10)
       }
-    ])
 
-    setPostText('')
-    setPostDate('')
+      setPosts(previous => [...previous, newPost])
+      setPostText('')
+      setPostDate('')
+      setPostMessage('Post saved successfully!')
+    }
+
+    setPostsLoading(false)
   }
 
-  function deletePost(id) {
-    setPosts(posts.filter(post => post.id !== id))
+  // Delete post from Supabase
+  async function deletePost(id) {
+    const { error } = await supabase
+      .from('social_posts')
+      .delete()
+      .eq('id', id)
+      .eq('company_id', company.id)
+
+    if (error) {
+      setPostMessage('Could not delete post: ' + error.message)
+      return
+    }
+
+    setPosts(previous => previous.filter(post => post.id !== id))
+    setPostMessage('Post deleted successfully.')
   }
 
+  // Generate SEO suggestions
   function generateSeoTips() {
     if (!keyword.trim()) {
       setSeoTips('Please enter a keyword first.')
@@ -75,24 +246,73 @@ Looking for something special? We have just what you need.
 2. Use it naturally in your page description.
 3. Add it to a relevant heading.
 4. Write useful content related to this keyword.
-5. Use the keyword naturally in your image descriptions.
-6. Add links to related pages on your website.
+5. Use the keyword naturally in image descriptions.
+6. Add links to related pages.
 7. Make sure your website works well on mobile devices.`
     )
   }
 
+  // Analytics
   const platformCounts = {
     Instagram: posts.filter(post => post.platform === 'Instagram').length,
     Facebook: posts.filter(post => post.platform === 'Facebook').length,
     LinkedIn: posts.filter(post => post.platform === 'LinkedIn').length
   }
 
+  // Loading and authentication screens
+  if (authLoading) {
+    return <p>Loading SmartMarket AI...</p>
+  }
+
+  if (!session) {
+    return <Auth />
+  }
+
+  if (companyLoading) {
+    return <p>Loading your company...</p>
+  }
+
+  if (companyError) {
+    return <section><p>Company loading error: {companyError}</p></section>
+  }
+
+  if (!company) {
+    return (
+      <CompanySetup
+        user={session.user}
+        onComplete={async () => {
+          const { data, error } = await supabase
+            .from('companies')
+            .select('id, name')
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle()
+
+          if (error) {
+            setCompanyError(error.message)
+          } else {
+            setCompany(data)
+          }
+        }}
+      />
+    )
+  }
+
   return (
     <div className="app">
       <header>
         <h1>🚀 SmartMarket AI</h1>
+        <p>Company: {company.name}</p>
+
         <nav>
-          {['Dashboard', 'AI Content Creator', 'Social Media Planner', 'SEO Tools', 'Analytics', 'Settings'].map(item => (
+          {[
+            'Dashboard',
+            'AI Content Creator',
+            'Social Media Planner',
+            'SEO Tools',
+            'Analytics',
+            'Settings'
+          ].map(item => (
             <button
               key={item}
               onClick={() => setPage(item)}
@@ -188,7 +408,10 @@ Looking for something special? We have just what you need.
             />
 
             <label>Select platform</label>
-            <select value={postPlatform} onChange={e => setPostPlatform(e.target.value)}>
+            <select
+              value={postPlatform}
+              onChange={e => setPostPlatform(e.target.value)}
+            >
               <option>Instagram</option>
               <option>Facebook</option>
               <option>LinkedIn</option>
@@ -201,19 +424,27 @@ Looking for something special? We have just what you need.
               onChange={e => setPostDate(e.target.value)}
             />
 
-            <button onClick={addPost}>Save Planned Post</button>
+            <button onClick={addPost} disabled={postsLoading}>
+              {postsLoading ? 'Please wait...' : 'Save Planned Post'}
+            </button>
+
+            {postMessage && <p>{postMessage}</p>}
 
             <div className="result">
               <h3>Your Planned Posts ({posts.length})</h3>
 
-              {posts.length === 0 ? (
+              {postsLoading ? (
+                <p>Loading posts...</p>
+              ) : posts.length === 0 ? (
                 <p>No planned posts yet. Create your first post above!</p>
               ) : (
                 posts.map(post => (
                   <div className="post-card" key={post.id}>
                     <h4>{post.platform} — {post.date}</h4>
                     <p>{post.text}</p>
-                    <button onClick={() => deletePost(post.id)}>Delete Post</button>
+                    <button onClick={() => deletePost(post.id)}>
+                      Delete Post
+                    </button>
                   </div>
                 ))
               )}
@@ -244,138 +475,141 @@ Looking for something special? We have just what you need.
           </section>
         )}
 
-        
-{page === 'Analytics' && (
-  <section className="analytics">
-    <h2>📊 Marketing Analytics</h2>
-    <p>Track your social media planning activity in one place.</p>
+        {page === 'Analytics' && (
+          <section className="analytics">
+            <h2>📊 Marketing Analytics</h2>
+            <p>Track your social media planning activity.</p>
 
-    {/* Statistics Cards */}
-    <div className="analytics-cards">
-      <div className="analytics-card">
-        <span>📝</span>
-        <h3>Total Planned Posts</h3>
-        <h2>{posts.length}</h2>
-        <p>All saved posts</p>
-      </div>
-
-      <div className="analytics-card">
-        <span>📸</span>
-        <h3>Instagram Posts</h3>
-        <h2>{platformCounts.Instagram}</h2>
-        <p>Instagram plans</p>
-      </div>
-
-      <div className="analytics-card">
-        <span>📘</span>
-        <h3>Facebook Posts</h3>
-        <h2>{platformCounts.Facebook}</h2>
-        <p>Facebook plans</p>
-      </div>
-
-      <div className="analytics-card">
-        <span>💼</span>
-        <h3>LinkedIn Posts</h3>
-        <h2>{platformCounts.LinkedIn}</h2>
-        <p>LinkedIn plans</p>
-      </div>
-    </div>
-
-    {/* Platform Performance */}
-    <div className="analytics-panel">
-      <h3>📈 Platform Performance</h3>
-      <p>Distribution of your planned social media posts.</p>
-
-      {Object.entries(platformCounts).map(([name, count]) => (
-        <div className="analytics-progress" key={name}>
-          <div className="progress-heading">
-            <span>{name}</span>
-            <strong>{count} posts</strong>
-          </div>
-
-          <div className="progress-track">
-            <div
-              className="progress-fill"
-              style={{
-                width: `${posts.length ? (count / posts.length) * 100 : 0}%`
-              }}
-            />
-          </div>
-        </div>
-      ))}
-    </div>
-
-    {/* Monthly Performance */}
-    <div className="analytics-panel">
-      <h3>📅 Monthly Planned Posts</h3>
-      <p>Number of posts planned for each month.</p>
-
-      <div className="monthly-chart">
-        {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((month, index) => {
-            const count = posts.filter(post => {
-              const date = new Date(post.date + 'T00:00:00')
-              return date.getMonth() === index
-            }).length
-
-            const maxCount = Math.max(
-              1,
-              ...Array.from({ length: 12 }, (_, i) =>
-                posts.filter(post =>
-                  new Date(post.date + 'T00:00:00').getMonth() === i
-                ).length
-              )
-            )
-
-            return (
-              <div className="month-column" key={month}>
-                <strong>{count}</strong>
-                <div className="month-bar-area">
-                  <div
-                    className="month-bar"
-                    style={{
-                      height: `${count ? (count / maxCount) * 100 : 0}%`
-                    }}
-                  />
-                </div>
-                <span>{month}</span>
+            <div className="analytics-cards">
+              <div className="analytics-card">
+                <span>📝</span>
+                <h3>Total Planned Posts</h3>
+                <h2>{posts.length}</h2>
+                <p>All saved posts</p>
               </div>
-            )
-          })}
-      </div>
-    </div>
 
-    {/* Recent Posts */}
-    <div className="analytics-panel">
-      <h3>📋 Recent Planned Posts</h3>
+              <div className="analytics-card">
+                <span>📸</span>
+                <h3>Instagram Posts</h3>
+                <h2>{platformCounts.Instagram}</h2>
+                <p>Instagram plans</p>
+              </div>
 
-      {posts.length === 0 ? (
-        <p>No planned posts available. Add posts in Social Media Planner to see analytics.</p>
-      ) : (
-        [...posts].reverse().slice(0, 5).map(post => (
-          <div className="analytics-post" key={post.id}>
-            <div>
-              <strong>{post.platform}</strong>
-              <p>{post.text}</p>
+              <div className="analytics-card">
+                <span>📘</span>
+                <h3>Facebook Posts</h3>
+                <h2>{platformCounts.Facebook}</h2>
+                <p>Facebook plans</p>
+              </div>
+
+              <div className="analytics-card">
+                <span>💼</span>
+                <h3>LinkedIn Posts</h3>
+                <h2>{platformCounts.LinkedIn}</h2>
+                <p>LinkedIn plans</p>
+              </div>
             </div>
-            <span>{post.date}</span>
-          </div>
-        ))
-      )}
-    </div>
 
-    <p className="analytics-note">
-      Note: These statistics show your planned posts only.
-      Real likes, reach, comments and engagement require social media account connections.
-    </p>
-  </section>
-)}
+            <div className="analytics-panel">
+              <h3>📈 Platform Performance</h3>
+              <p>Distribution of your planned posts.</p>
 
+              {Object.entries(platformCounts).map(([name, count]) => (
+                <div className="analytics-progress" key={name}>
+                  <div className="progress-heading">
+                    <span>{name}</span>
+                    <strong>{count} posts</strong>
+                  </div>
+
+                  <div className="progress-track">
+                    <div
+                      className="progress-fill"
+                      style={{
+                        width: `${posts.length ? (count / posts.length) * 100 : 0}%`
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="analytics-panel">
+              <h3>📅 Monthly Planned Posts</h3>
+
+              <div className="monthly-chart">
+                {[
+                  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+                ].map((month, index) => {
+                  const count = posts.filter(post =>
+                    new Date(post.date + 'T00:00:00').getMonth() === index
+                  ).length
+
+                  const maxCount = Math.max(
+                    1,
+                    ...Array.from({ length: 12 }, (_, i) =>
+                      posts.filter(post =>
+                        new Date(post.date + 'T00:00:00').getMonth() === i
+                      ).length
+                    )
+                  )
+
+                  return (
+                    <div className="month-column" key={month}>
+                      <strong>{count}</strong>
+                      <div className="month-bar-area">
+                        <div
+                          className="month-bar"
+                          style={{
+                            height: `${count ? (count / maxCount) * 100 : 0}%`
+                          }}
+                        />
+                      </div>
+                      <span>{month}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="analytics-panel">
+              <h3>📋 Recent Planned Posts</h3>
+
+              {posts.length === 0 ? (
+                <p>No planned posts available.</p>
+              ) : (
+                [...posts].reverse().slice(0, 5).map(post => (
+                  <div className="analytics-post" key={post.id}>
+                    <div>
+                      <strong>{post.platform}</strong>
+                      <p>{post.text}</p>
+                    </div>
+                    <span>{post.date}</span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <p className="analytics-note">
+              These statistics show planned posts only.
+              Real likes, reach, comments and engagement require social media account connections.
+            </p>
+          </section>
+        )}
 
         {page === 'Settings' && (
           <section>
             <h2>⚙️ Settings</h2>
-            <p>Settings options will be added here soon.</p>
+            <p>Company: {company.name}</p>
+            <p>Logged in as: {session.user.email}</p>
+            <button
+              onClick={async () => {
+                const { error } = await supabase.auth.signOut()
+                if (error) alert(error.message)
+              }}
+            >
+              Logout
+            </button>
           </section>
         )}
       </main>

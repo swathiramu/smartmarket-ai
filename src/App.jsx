@@ -4,6 +4,7 @@ import './App.css'
 import { supabase } from './supabaseClient'
 import Auth from './Auth'
 import CompanySetup from './CompanySetup'
+import CRM from './CRM'
 
 function App() {
   const [page, setPage] = useState('Dashboard')
@@ -31,9 +32,9 @@ function App() {
   const [postsLoading, setPostsLoading] = useState(false)
   const [postMessage, setPostMessage] = useState('')
 
-  // SEO Tools
-  const [keyword, setKeyword] = useState('')
-  const [seoTips, setSeoTips] = useState('')
+ 
+const [keyword, setKeyword] = useState('')
+const [seoTips, setSeoTips] = useState('')
 
   // Check login session
   useEffect(() => {
@@ -232,25 +233,6 @@ Looking for something special? We have just what you need.
     setPostMessage('Post deleted successfully.')
   }
 
-  // Generate SEO suggestions
-  function generateSeoTips() {
-    if (!keyword.trim()) {
-      setSeoTips('Please enter a keyword first.')
-      return
-    }
-
-    setSeoTips(
-      `SEO suggestions for "${keyword}":
-
-1. Include this keyword in your page title.
-2. Use it naturally in your page description.
-3. Add it to a relevant heading.
-4. Write useful content related to this keyword.
-5. Use the keyword naturally in image descriptions.
-6. Add links to related pages.
-7. Make sure your website works well on mobile devices.`
-    )
-  }
 
   // Analytics
   const platformCounts = {
@@ -309,7 +291,7 @@ Looking for something special? We have just what you need.
             'Dashboard',
             'AI Content Creator',
             'Social Media Planner',
-            'SEO Tools',
+            'CRM',
             'Analytics',
             'Settings'
           ].map(item => (
@@ -342,12 +324,13 @@ Looking for something special? We have just what you need.
                 <p>Organize your upcoming social media posts.</p>
                 <button onClick={() => setPage('Social Media Planner')}>Get Started</button>
               </div>
-
               <div className="card">
-                <h3>🔍 SEO Tools</h3>
-                <p>Get suggestions to improve website visibility.</p>
-                <button onClick={() => setPage('SEO Tools')}>Get Started</button>
-              </div>
+                <h3>👥 Customer Management</h3>
+                <p>Manage customers, leads and follow-ups.</p>
+                <button onClick={() => setPage('CRM')}>Manage Customers
+                </button>
+                </div>
+
 
               <div className="card">
                 <h3>📊 Analytics</h3>
@@ -452,29 +435,9 @@ Looking for something special? We have just what you need.
           </section>
         )}
 
-        {page === 'SEO Tools' && (
-          <section className="creator">
-            <h2>🔍 SEO Tools</h2>
-            <p>Improve your website visibility with SEO suggestions.</p>
-
-            <label>Enter your target keyword</label>
-            <input
-              value={keyword}
-              onChange={e => setKeyword(e.target.value)}
-              placeholder="Example: fashion shop in Coimbatore"
-            />
-
-            <button onClick={generateSeoTips}>Generate SEO Suggestions</button>
-
-            {seoTips && (
-              <div className="result">
-                <h3>Your SEO Suggestions</h3>
-                <p style={{ whiteSpace: 'pre-line' }}>{seoTips}</p>
-              </div>
-            )}
-          </section>
-        )}
-
+        {page === 'CRM' && (
+  <CRM company={company} user={session.user} />
+)}
         {page === 'Analytics' && (
           <section className="analytics">
             <h2>📊 Marketing Analytics</h2>
